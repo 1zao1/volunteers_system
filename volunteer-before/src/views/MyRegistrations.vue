@@ -36,6 +36,14 @@
         </div>
       </div>
       <span class="pill" :class="statusOf(r.status).cls">{{ statusOf(r.status).text }}</span>
+      <button
+        v-if="canReview(r)"
+        class="btn btn-soft btn-sm"
+        @click="openReview(r)"
+      >
+        <i class="bi bi-star"></i> 评价组织者
+      </button>
+      <span v-else-if="r.reviewed" class="pill grey nowrap">已评价</span>
       <router-link
         v-if="r.activityId"
         :to="`/activity/${r.activityId}`"
@@ -66,6 +74,56 @@
   >
     <router-link to="/activities" class="btn btn-primary btn-sm mt-16">去活动广场</router-link>
   </EmptyState>
+
+  <div v-if="cur" class="modal-mask" @click.self="cur = null">
+    <div class="modal" style="max-width: 420px">
+      <div class="modal-head">
+        <div>
+          <h3>评价组织者</h3>
+          <div class="sub">{{ cur.activityTitle }}</div>
+        </div>
+        <button class="btn-plain" @click="cur = null"><i class="bi bi-x-lg"></i></button>
+      </div>
+
+      <div class="review-target">
+        <span class="avatar">{{ (cur.organizerName || '?').slice(0, 1).toUpperCase() }}</span>
+        <div>
+          <div class="strong">{{ cur.organizerName || '活动组织者' }}</div>
+          <div class="muted" style="font-size: 12.5px">这次活动的组织体验怎么样？</div>
+        </div>
+      </div>
+
+      <div class="rate-stars">
+        <button
+          v-for="n in 5"
+          :key="n"
+          type="button"
+          :class="{ on: n <= form.rating }"
+          @click="form.rating = n"
+        >
+          <i class="bi" :class="n <= form.rating ? 'bi-star-fill' : 'bi-star'"></i>
+        </button>
+      </div>
+      <div class="rate-text">{{ ratingText }}</div>
+
+      <label class="label" style="margin-top: 8px">评价内容（选填，最多 120 字）</label>
+      <textarea
+        v-model="form.comment"
+        class="input"
+        rows="3"
+        maxlength="120"
+        placeholder="可以写下组织安排、沟通、现场保障等方面的感受"
+      ></textarea>
+      <div class="hint">1-2 星视为差评。同一场活动只能评价一次。</div>
+
+      <div class="modal-foot">
+        <button class="btn btn-ghost" @click="cur = null">取消</button>
+        <button class="btn btn-primary" :disabled="saving || !form.rating" @click="submitReview">
+          {{ saving ? '提交中…' : '提交评价' }}
+        </button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup>
@@ -77,11 +135,44 @@ import { toast } from '../utils/toast'
 
 const list = ref([])
 const loading = ref(true)
+const cur = ref(null)
+const saving = ref(false)
+const form = ref({ rating: 0, comment: '' })
+
+const ratingText = computed(() => {
+  const r = form.value.rating
+  if (!r) return '点星星打分'
+  return ['', '很差', '较差', '一般', '不错', '很棒'][r] + '（' + r + ' 星）'
+})
 
 const counts = computed(() => ({
   pending: list.value.filter((r) => r.status === 'pending').length,
   approved: list.value.filter((r) => r.status === 'approved').length
 }))
+
+function canReview(r) {
+  return r.status === 'approved' && r.ended && !r.reviewed
+}
+
+function openReview(r) {
+  cur.value = r
+  form.value = { rating: 0, comment: '' }
+}
+
+async function submitReview() {
+  if (!form.value.rating) return toast.error('请先选择星级')
+  saving.value = true
+  try {
+    const res = await api.submitReview(cur.value.id, form.value.rating, form.value.comment)
+    toast.success(res?.message || '评价已提交')
+    cur.value = null
+    await load()
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    saving.value = false
+  }
+}
 
 function statusOf(s) {
   return STATUS_TEXT[s] || { text: s, cls: 'grey' }

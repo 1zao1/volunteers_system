@@ -2,6 +2,7 @@ package com.volunteer.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
@@ -39,4 +40,16 @@ public class Activity {
 
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm")
     private LocalDateTime createTime;
+
+    /** 发布人昵称（非数据库字段，详情/列表时补充） */
+    @TableField(exist = false)
+    private String organizerName;
+
+    /** 发布人头像（非数据库字段） */
+    @TableField(exist = false)
+    private String organizerAvatar;
+
+    /** 是否已结束（非数据库字段，按结束时间计算） */
+    @TableField(exist = false)
+    private Boolean ended;
 }

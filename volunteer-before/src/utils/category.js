@@ -63,6 +63,12 @@ export function isEnded(activity) {
   return Number.isFinite(t) && t < Date.now()
 }
 
+export function isStarted(activity) {
+  if (!activity?.startTime) return false
+  const t = new Date(String(activity.startTime).replace(' ', 'T')).getTime()
+  return Number.isFinite(t) && t < Date.now()
+}
+
 export function remainOf(a) {
   return Math.max(0, (a?.maxCount || 0) - (a?.signedCount || 0))
 }

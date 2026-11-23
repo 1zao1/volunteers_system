@@ -3,7 +3,7 @@
     <div>
       <h2>活动管理</h2>
       <div class="sub">
-        {{ canManage ? '发布、编辑、上下架活动，报名人数与余位实时同步' : '管理员仅可查看全站活动，发布与审核由组织者负责' }}
+        发布、编辑、上下架活动，报名人数与余位实时同步
       </div>
     </div>
     <button v-if="canManage" class="btn btn-primary btn-sm" @click="openCreate">
@@ -47,14 +47,16 @@
             <td class="nowrap">{{ a.signedCount }} / {{ a.maxCount }}</td>
             <td class="nowrap">{{ a.hours }} h</td>
             <td>
-              <span class="pill" :class="statusPill(a.status).cls">{{ statusPill(a.status).text }}</span>
+              <span class="pill nowrap" :class="statusPill(a).cls">{{ statusPill(a).text }}</span>
             </td>
             <td>
               <div v-if="canManage" class="flex gap-8" style="justify-content: flex-end">
+                <button class="btn btn-ghost btn-sm" @click="goGroup(a)"><i class="bi bi-people"></i> 群聊</button>
                 <button class="btn btn-ghost btn-sm" @click="openEdit(a)">编辑</button>
-                <button class="btn btn-soft btn-sm" @click="toggle(a)">
+                <button v-if="!a.ended" class="btn btn-soft btn-sm" @click="toggle(a)">
                   {{ a.status === 'published' ? '下架' : '上架' }}
                 </button>
+                <span v-else class="muted nowrap" style="font-size: 12.5px">已自动下架</span>
                 <button class="btn btn-danger btn-sm" @click="remove(a)">删除</button>
               </div>
               <div v-else class="muted" style="font-size: 12px; text-align: right">只读</div>
@@ -190,6 +192,7 @@ import { fmtTime, styleOf, CATEGORIES } from '../utils/category'
 import { COVERS, coverUrl } from '../utils/covers'
 import { toast } from '../utils/toast'
 import { useAuthStore } from '../store/auth'
+import { useRouter } from 'vue-router'
 
 const auth = useAuthStore()
 const canManage = computed(() => auth.role === 'organizer')
@@ -252,7 +255,8 @@ const STATUS = {
   closed: { text: '已结束', cls: 'amber' },
   cancelled: { text: '已取消', cls: 'rose' }
 }
-const statusPill = (s) => STATUS[s] || { text: s, cls: 'grey' }
+const statusPill = (a) =>
+  a.ended ? { text: '已结束', cls: 'amber' } : (STATUS[a.status] || { text: a.status, cls: 'grey' })
 
 function toInput(v) {
   return v ? String(v).replace(' ', 'T').slice(0, 16) : ''
@@ -350,6 +354,11 @@ async function remove(a) {
   } catch (e) {
     toast.error(e.message)
   }
+}
+
+const router = useRouter()
+function goGroup(a) {
+  router.push({ path: '/messages', query: { group: String(a.id) } })
 }
 
 onMounted(load)

@@ -4,11 +4,13 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.volunteer.entity.Activity;
 import com.volunteer.entity.Attendance;
+import com.volunteer.entity.OrganizerReview;
 import com.volunteer.entity.Registration;
 import com.volunteer.entity.User;
 import com.volunteer.mapper.ActivityMapper;
 import com.volunteer.mapper.AttendanceMapper;
 import com.volunteer.mapper.RegistrationMapper;
+import com.volunteer.mapper.OrganizerReviewMapper;
 import com.volunteer.mapper.UserMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -24,6 +26,8 @@ public class RegistrationService {
     @Autowired
     private RegistrationMapper regMapper;
     @Autowired
+    private OrganizerReviewMapper reviewMapper;
+    @Autowired
     private ActivityMapper activityMapper;
     @Autowired
     private UserMapper userMapper;
@@ -31,6 +35,8 @@ public class RegistrationService {
     private AttendanceMapper attendanceMapper;
     @Autowired
     private UserService userService;
+    @Autowired
+    private ActivityChatService activityChatService;
 
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
@@ -64,7 +70,7 @@ public class RegistrationService {
         // 信誉分低于 85 仍可报名（提示由前端给出），只是会被标记为低信誉
         int credit = u == null || u.getCreditScore() == null ? 100 : u.getCreditScore();
         if (credit < 0) {
-            throw new RuntimeException("信誉分异常，请联系管理员");
+            throw new RuntimeException("信誉分异常，请联系活动组织者");
         }
         if (regMapper.selectCount(new LambdaQueryWrapper<Registration>()
                 .eq(Registration::getUserId, userId)
@@ -118,6 +124,16 @@ public class RegistrationService {
             m.put("hours", a != null ? a.getHours() : null);
             m.put("status", r.getStatus());
             m.put("signupTime", fmt(r.getSignupTime()));
+            m.put("organizerId", a != null ? a.getOrganizerId() : null);
+            if (a != null && a.getOrganizerId() != null) {
+                User o = userMapper.selectById(a.getOrganizerId());
+                m.put("organizerName", o == null ? "发布者已注销"
+                        : (o.getNickname() != null && !o.getNickname().isBlank() ? o.getNickname() : o.getUsername()));
+            }
+            m.put("ended", a != null && a.getEndTime() != null
+                    && a.getEndTime().isBefore(java.time.LocalDateTime.now()));
+            m.put("reviewed", reviewMapper.selectCount(new LambdaQueryWrapper<OrganizerReview>()
+                    .eq(OrganizerReview::getRegistrationId, r.getId())) > 0);
             res.add(m);
         }
         return res;
@@ -186,7 +202,7 @@ public class RegistrationService {
     /** 校验：当前操作人必须是该活动的组织者，且报名人不能是自己 */
     private Activity requireOwner(Long regId, Long operatorId, String role) {
         if (!"organizer".equals(role)) {
-            throw new RuntimeException("报名审核由活动组织者负责，管理员不参与审核");
+            throw new RuntimeException("报名审核由活动组织者负责");
         }
         Registration r = regMapper.selectById(regId);
         if (r == null) throw new RuntimeException("报名记录不存在");
@@ -218,6 +234,9 @@ public class RegistrationService {
                     .eq(Activity::getId, r.getActivityId())
                     .apply("signed_count > 0")
                     .setSql("signed_count = signed_count - 1"));
+        } else {
+            // 审核通过即入群，把入群前的历史消息标为已读
+            activityChatService.markReadToEnd(r.getActivityId(), r.getUserId());
         }
     }
 

@@ -46,8 +46,8 @@ public class UserService {
         u.setPassword(dto.getPassword());
         u.setPhone(dto.getPhone());
         String role = StringUtils.hasText(dto.getRole()) ? dto.getRole().trim() : "volunteer";
-        if (!Arrays.asList("volunteer", "organizer", "admin").contains(role)) {
-            throw new RuntimeException("注册角色只能是 volunteer / organizer / admin");
+        if (!Arrays.asList("volunteer", "organizer").contains(role)) {
+            throw new RuntimeException("注册角色只能是 volunteer / organizer");
         }
         u.setRole(role);
         u.setCreditScore(100);
@@ -74,15 +74,22 @@ public class UserService {
         if (u == null || !u.getPassword().equals(dto.getPassword())) {
             throw new RuntimeException("用户名或密码错误");
         }
+        // 平台只保留志愿者与组织者；历史上残留的 admin 账号按组织者身份继续使用
+        String role = u.getRole();
+        if ("admin".equals(role) || "admin_pending".equals(role)) {
+            role = "organizer";
+            u.setRole(role);
+            userMapper.updateById(u);
+        }
         LoginVO vo = new LoginVO();
-        vo.setToken(jwtUtil.generate(u.getId(), u.getRole()));
+        vo.setToken(jwtUtil.generate(u.getId(), role));
         vo.setId(u.getId());
         vo.setName(u.getUsername());
         vo.setNickname(StringUtils.hasText(u.getNickname()) ? u.getNickname() : u.getUsername());
         vo.setAvatar(u.getAvatar());
         vo.setSignature(u.getSignature());
         vo.setCreditScore(u.getCreditScore());
-        vo.setRole(u.getRole());
+        vo.setRole(role);
         return vo;
     }
 
@@ -111,10 +118,10 @@ public class UserService {
 
     public String creditDesc(Integer score) {
         int c = score == null ? 100 : score;
-        if (c >= 95) return "信誉良好，可优先报名热门活动";
-        if (c >= 85) return "信誉正常，一旦再次违约将降至低信誉";
-        if (c >= 80) return "信誉偏低，正在每 2 小时恢复 1 分";
-        return "低信誉志愿者，暂不能报名新活动";
+        if (c >= 95) return "信誉良好，可同时报名多个活动";
+        if (c >= 85) return "信誉正常，再违约一次将进入低信誉";
+        if (c >= 60) return "低信誉，同时只能保留 1 个未完成报名，每 2 小时恢复 1 分";
+        return "失信状态，暂停报名新活动，每 2 小时恢复 1 分";
     }
 
     public void updateProfile(Long userId, ProfileDTO dto) {

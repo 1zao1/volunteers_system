@@ -27,7 +27,8 @@ request.interceptors.response.use(
     const msg = err.response?.data?.message || err.message || '网络异常，请稍后重试'
     if (status === 401) {
       useAuthStore().logout()
-      router.push('/login')
+      // 公开页面（活动广场/详情）不强制跳登录，游客可继续浏览
+      if (!router.currentRoute.value.meta?.public) router.push('/login')
     }
     return Promise.reject(new Error(msg))
   }

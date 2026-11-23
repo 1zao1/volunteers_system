@@ -150,7 +150,7 @@ const presets = [
 ]
 
 const stat = ref({ a: 0, b: 0, c: 0, aLabel: '', bLabel: '', cLabel: '' })
-const statTitle = computed(() => (auth.role === 'admin' ? '我的治理概览' : '我的志愿足迹'))
+const statTitle = computed(() => '我的志愿足迹')
 
 async function load() {
   try {

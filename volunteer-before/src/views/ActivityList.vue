@@ -1,38 +1,31 @@
 <template>
-  <section class="hero">
-    <div class="hero-badge"><i class="bi bi-stars"></i> 承德市社区志愿服务平台</div>
-    <h1>让善意流动，<br />让每一次<em>付出</em>都有回响</h1>
-    <p>从社区义诊到赛事保障，挑一个与你时间、技能都合拍的活动，报名只需一步。</p>
+  <section class="app-hero" :style="heroStyle">
+    <div class="app-hero-inner">
+      <span class="hero-pill"><i class="bi bi-stars"></i> 承德市社区志愿服务平台</span>
+      <h1>让善意流动<br />让每一次付出都有回响</h1>
+      <p>从社区义诊到赛事保障，选一个与你时间和技能都合拍的活动。</p>
 
-    <div class="search">
-      <i class="bi bi-search"></i>
-      <input v-model.trim="keyword" placeholder="搜索活动名称，如：义诊、马拉松、支教…" />
-      <button v-if="keyword" class="btn btn-ghost btn-sm" @click="keyword = ''">
-        <i class="bi bi-x-lg"></i>
-      </button>
-    </div>
+      <div class="search hero-search">
+        <i class="bi bi-search"></i>
+        <input v-model.trim="keyword" placeholder="搜索活动名称，如：义诊、马拉松、支教…" />
+        <button v-if="keyword" class="clear-btn" @click="keyword = ''"><i class="bi bi-x-lg"></i></button>
+      </div>
 
-    <div class="stats-strip">
-      <div class="item">
-        <div class="num">{{ overview.activityCount ?? '—' }}<small>场</small></div>
-        <div class="label">正在招募的活动</div>
+      <div class="hero-stats">
+        <div class="hs"><b>{{ overview.activityCount ?? '—' }}</b><span>招募中活动</span></div>
+        <div class="hs"><b>{{ overview.volunteerCount ?? '—' }}</b><span>志愿者</span></div>
+        <div class="hs"><b>{{ overview.hoursTotal ?? '—' }}</b><span>已认定工时</span></div>
+        <div class="hs"><b>{{ overview.signupCount ?? '—' }}</b><span>报名人次</span></div>
       </div>
-      <div class="item">
-        <div class="num">{{ overview.volunteerCount ?? '—' }}<small>人</small></div>
-        <div class="label">注册志愿者</div>
-      </div>
-      <div class="item">
-        <div class="num">{{ overview.hoursTotal ?? '—' }}<small>h</small></div>
-        <div class="label">累计认定工时</div>
-      </div>
-      <div class="item">
-        <div class="num">{{ overview.signupCount ?? '—' }}<small>次</small></div>
-        <div class="label">累计报名人次</div>
+
+      <div v-if="!auth.isLogin" class="hero-guest">
+        <span>登录后即可报名，未登录也可以随便逛逛</span>
+        <router-link to="/login" class="btn btn-light btn-sm">登录 / 注册</router-link>
       </div>
     </div>
   </section>
 
-  <div class="chips">
+  <div class="chips app-chips">
     <button class="chip" :class="{ active: category === '全部' }" @click="category = '全部'">
       全部 <span class="count">{{ list.length }}</span>
     </button>
@@ -66,29 +59,28 @@
     </div>
   </div>
 
-  <EmptyState
-    v-else
-    icon="bi-calendar-x"
-    title="没有匹配的活动"
-    desc="换个关键词或分类试试，新的活动每周都会上架。"
-  />
+  <EmptyState v-else icon="bi-calendar-x" title="没有匹配的活动" desc="换个关键词或分类试试，新活动每周都会上架。" />
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import api from '../api'
 import ActivityCard from '../components/ActivityCard.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { toast } from '../utils/toast'
 import { useAuthStore } from '../store/auth'
+import hero from '../assets/hero.jpg'
 
 const auth = useAuthStore()
+const router = useRouter()
 const list = ref([])
 const overview = ref({})
 const keyword = ref('')
 const category = ref('全部')
 const loading = ref(true)
 const err = ref('')
+const heroStyle = { backgroundImage: `url(${hero})` }
 
 const categories = computed(() => {
   const map = new Map()
@@ -111,9 +103,11 @@ async function load() {
   loading.value = true
   err.value = ''
   try {
-    const [acts, ov] = await Promise.all([api.getActivities(), api.getOverview()])
+    const [actsRes, ovRes] = await Promise.allSettled([api.getActivities(), api.getOverview()])
+    if (actsRes.status !== 'fulfilled') throw actsRes.reason
+    const acts = actsRes.value
     list.value = Array.isArray(acts) ? acts : acts?.data || []
-    overview.value = ov || {}
+    overview.value = ovRes.status === 'fulfilled' && ovRes.value ? ovRes.value : {}
   } catch (e) {
     err.value = e.message
     toast.error(e.message)
@@ -123,13 +117,19 @@ async function load() {
 }
 
 async function signup(a) {
-  if (auth.role === 'admin') return toast.error('管理员请到「活动管理」中操作')
+  if (!auth.isLogin) {
+    toast.error('登录后才能报名活动')
+    router.push('/login')
+    return
+  }
   if (auth.role === 'organizer' && a.organizerId === auth.user?.id) {
     return toast.error('这是你发布的活动，不能报名自己的活动')
   }
   const credit = auth.creditScore
-  if (credit < 85) {
-    const ok = window.confirm(`您现在的信誉分为：${credit}，低于85分，需要做活动换取信誉分，2小时换取1信誉分，直至达到85及以上。确定继续报名吗？`)
+  if (credit < 60) {
+    return toast.error(`您现在的信誉分为：${credit}，低于60分，暂不能报名新活动，每 2 小时恢复 1 分`)
+  } else if (credit < 85) {
+    const ok = window.confirm(`您现在的信誉分为：${credit}，低于85分，需要做活动换取信誉分，2小时换取1信誉分，直至达到85及以上。低信誉期间同时只能有 1 个未完成的报名。确定继续报名吗？`)
     if (!ok) return
   } else if (credit === 85) {
     const ok = window.confirm('您当前信誉分为85分，若再次违约你就会成为“低信誉志愿者”。确定继续报名吗？')

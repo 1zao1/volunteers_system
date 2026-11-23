@@ -53,70 +53,32 @@ public class AdminController {
                 .gt(Activity::getEndTime, LocalDateTime.now());
         if (isOrg) pubW.eq(Activity::getOrganizerId, uid);
         m.put("publishedActivities", activityMapper.selectCount(pubW));
-        m.put("totalVolunteers", userMapper.selectCount(new LambdaQueryWrapper<User>()
-                .eq(User::getRole, "volunteer")));
+        Set<Long> myAct = new HashSet<>();
+        for (Activity a : activityMapper.selectList(new LambdaQueryWrapper<Activity>()
+                .eq(Activity::getOrganizerId, uid))) {
+            myAct.add(a.getId());
+        }
+        m.put("totalVolunteers", myAct.isEmpty() ? 0 : distinctVolunteers(myAct));
         m.put("organizers", userMapper.selectCount(new LambdaQueryWrapper<User>()
                 .eq(User::getRole, "organizer")));
-        m.put("admins", userMapper.selectCount(new LambdaQueryWrapper<User>()
-                .eq(User::getRole, "admin")));
-        m.put("totalHours", attendanceService.totalHours());
-        m.put("totalSignups", regMapper.selectCount(null));
+        m.put("totalHours", attendanceService.totalHours(uid));
+        m.put("totalSignups", myAct.isEmpty() ? 0
+                : regMapper.selectCount(new LambdaQueryWrapper<Registration>()
+                        .in(Registration::getActivityId, myAct)));
 
-        // 组织者看到的是自己活动范围内的待办；管理员看到的是全站只读数字
+        // 组织者看到的是自己活动范围内的待办
         List<Map<String, Object>> pendingList = registrationService.listForAdmin("pending", uid, role);
         long pendingHours = registrationService.listForAdmin("approved", uid, role).stream()
-                .filter(r -> !(Boolean) r.get("issued")).count();
+                .filter(r -> !(Boolean) r.get("issued") && Boolean.TRUE.equals(r.get("activityEnded")))
+                .count();
         m.put("pendingAudit", pendingList.size());
         m.put("pendingHours", pendingHours);
         m.put("pendingUsers", pendingList.stream().map(r -> r.get("username")).distinct().limit(5).toList());
 
-        m.put("lowCredit", userMapper.selectCount(new LambdaQueryWrapper<User>()
-                .lt(User::getCreditScore, 85)));
-        m.put("creditDist", creditDist());
-        m.put("lowCreditUsers", lowCreditUsers());
-
         m.put("categoryStats", categoryStats(uid, isOrg));
-        m.put("trend", last7DaysTrend());
+        m.put("trend", last7DaysTrend(myAct));
         m.put("recent", recentRegistrations(uid, isOrg));
         return Result.success(m);
-    }
-
-    private List<Map<String, Object>> creditDist() {
-        List<User> users = userMapper.selectList(new LambdaQueryWrapper<User>()
-                .eq(User::getRole, "volunteer"));
-        Map<String, Long> bands = new LinkedHashMap<>();
-        bands.put("95–100 优秀", 0L);
-        bands.put("85–94 正常", 0L);
-        bands.put("低于 85 需提示", 0L);
-        for (User u : users) {
-            int c = u.getCreditScore() == null ? 100 : u.getCreditScore();
-            String k = c >= 95 ? "95–100 优秀" : c >= 85 ? "85–94 正常" : "低于 85 需提示";
-            bands.merge(k, 1L, Long::sum);
-        }
-        List<Map<String, Object>> res = new ArrayList<>();
-        bands.forEach((k, v) -> {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("name", k);
-            m.put("count", v);
-            res.add(m);
-        });
-        return res;
-    }
-
-    private List<Map<String, Object>> lowCreditUsers() {
-        List<Map<String, Object>> res = new ArrayList<>();
-        for (User u : userMapper.selectList(new LambdaQueryWrapper<User>()
-                .lt(User::getCreditScore, UserService.CREDIT_FLOOR)
-                .orderByAsc(User::getCreditScore))) {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("id", u.getId());
-            m.put("username", u.getUsername());
-            m.put("nickname", u.getNickname() != null && !u.getNickname().isBlank() ? u.getNickname() : u.getUsername());
-            m.put("creditScore", u.getCreditScore());
-            m.put("role", u.getRole());
-            res.add(m);
-        }
-        return res;
     }
 
     private List<Map<String, Object>> categoryStats(Long uid, boolean onlyMine) {
@@ -139,14 +101,23 @@ public class AdminController {
         return res;
     }
 
-    private List<Map<String, Object>> last7DaysTrend() {
+    private long distinctVolunteers(Set<Long> myAct) {
+        List<Registration> regs = regMapper.selectList(new LambdaQueryWrapper<Registration>()
+                .in(Registration::getActivityId, myAct)
+                .ne(Registration::getStatus, "rejected"));
+        return regs.stream().map(Registration::getUserId).distinct().count();
+    }
+
+    private List<Map<String, Object>> last7DaysTrend(Set<Long> myAct) {
         List<Map<String, Object>> res = new ArrayList<>();
         LocalDate today = LocalDate.now();
         for (int i = 6; i >= 0; i--) {
             LocalDate day = today.minusDays(i);
-            Long c = regMapper.selectCount(new LambdaQueryWrapper<Registration>()
+            LambdaQueryWrapper<Registration> w = new LambdaQueryWrapper<Registration>()
                     .ge(Registration::getSignupTime, day.atStartOfDay())
-                    .lt(Registration::getSignupTime, day.plusDays(1).atStartOfDay()));
+                    .lt(Registration::getSignupTime, day.plusDays(1).atStartOfDay());
+            if (!myAct.isEmpty()) w.in(Registration::getActivityId, myAct);
+            Long c = regMapper.selectCount(w);
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("date", day.format(DAY));
             m.put("count", c == null ? 0 : c);
@@ -190,8 +161,8 @@ public class AdminController {
 
     /* ================= 活动管理 ================= */
     @GetMapping("/activities")
-    public Result<?> activities() {
-        return Result.success(activityService.listAll());
+    public Result<?> activities(HttpServletRequest req) {
+        return Result.success(activityService.listAll((Long) req.getAttribute("userId")));
     }
 
     @PostMapping("/activities")
@@ -201,75 +172,25 @@ public class AdminController {
     }
 
     @PutMapping("/activities/{id}")
-    public Result<?> updateActivity(@PathVariable Long id, @RequestBody Activity a) {
+    public Result<?> updateActivity(@PathVariable Long id, @RequestBody Activity a, HttpServletRequest req) {
         a.setId(id);
-        activityService.update(a);
+        activityService.update(a, (Long) req.getAttribute("userId"));
         return Result.success();
     }
 
     @PatchMapping("/activities/{id}/status")
-    public Result<?> changeStatus(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+    public Result<?> changeStatus(@PathVariable Long id, @RequestBody Map<String, Object> body,
+                                  HttpServletRequest req) {
         Object status = body.get("status");
         if (status == null) throw new RuntimeException("缺少 status 参数");
-        activityService.changeStatus(id, String.valueOf(status));
+        activityService.changeStatus(id, String.valueOf(status), (Long) req.getAttribute("userId"));
         return Result.success();
     }
 
     @DeleteMapping("/activities/{id}")
-    public Result<?> deleteActivity(@PathVariable Long id) {
-        activityService.delete(id);
+    public Result<?> deleteActivity(@PathVariable Long id, HttpServletRequest req) {
+        activityService.delete(id, (Long) req.getAttribute("userId"));
         return Result.success();
-    }
-
-    /* ================= 用户管理（仅管理员） ================= */
-    @GetMapping("/users")
-    public Result<?> users(HttpServletRequest req) {
-        requireAdmin(req);
-        List<User> list = userMapper.selectList(new LambdaQueryWrapper<User>().orderByAsc(User::getId));
-        List<Map<String, Object>> res = new ArrayList<>();
-        for (User u : list) {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("id", u.getId());
-            m.put("username", u.getUsername());
-            m.put("nickname", u.getNickname() != null && !u.getNickname().isBlank() ? u.getNickname() : u.getUsername());
-            m.put("phone", u.getPhone());
-            m.put("role", u.getRole());
-            m.put("skills", u.getSkills());
-            m.put("creditScore", u.getCreditScore());
-            m.put("avatar", u.getAvatar());
-            m.put("createTime", u.getCreateTime() == null ? null : u.getCreateTime().format(FMT));
-            res.add(m);
-        }
-        return Result.success(res);
-    }
-
-    @PatchMapping("/users/{id}")
-    public Result<?> updateUser(@PathVariable Long id, @RequestBody Map<String, Object> body,
-                                HttpServletRequest req) {
-        requireAdmin(req);
-        User u = userMapper.selectById(id);
-        if (u == null) throw new RuntimeException("用户不存在");
-        Object role = body.get("role");
-        if (role != null) {
-            String r = String.valueOf(role);
-            if (!Arrays.asList("volunteer", "organizer", "admin").contains(r)) {
-                throw new RuntimeException("角色只能是 volunteer / organizer / admin");
-            }
-            u.setRole(r);
-        }
-        Object credit = body.get("creditScore");
-        if (credit != null) {
-            int score = ((Number) credit).intValue();
-            if (score < 0 || score > 100) throw new RuntimeException("信用分需在 0–100 之间");
-            u.setCreditScore(score);
-        }
-        userMapper.updateById(u);
-        return Result.success();
-    }
-
-    private void requireAdmin(HttpServletRequest req) {
-        String role = String.valueOf(req.getAttribute("role"));
-        if (!"admin".equals(role)) throw new RuntimeException("只有管理员可以进行用户管理");
     }
 
     /* ================= 报名审核 / 工时 ================= */
@@ -298,7 +219,7 @@ public class AdminController {
     @PostMapping("/attendance")
     public Result<?> issueHours(@RequestBody AttendanceDTO dto, HttpServletRequest req) {
         if (dto.getRegistrationId() == null) throw new RuntimeException("缺少报名记录 id");
-        attendanceService.issue(dto.getRegistrationId(), dto.getHours(),
+        attendanceService.issue(dto.getRegistrationId(), dto.getHours(), dto.getCreditScore(),
                 (Long) req.getAttribute("userId"), String.valueOf(req.getAttribute("role")));
         return Result.success();
     }

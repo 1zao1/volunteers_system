@@ -27,21 +27,15 @@ public class ScheduledTasks implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        try {
-            int issued = attendanceService.autoIssueForFinished();
-            log.info("[予光] 启动补齐工时 {} 条", issued);
-        } catch (Exception e) {
-            log.warn("[予光] 启动补齐工时失败：{}", e.getMessage());
-        }
+        // 工时与信誉分改由组织者在活动结束后手动认定，不再自动补齐
     }
 
     @Scheduled(fixedDelay = 600000, initialDelay = 60000)
     public void tick() {
         try {
-            int issued = attendanceService.autoIssueForFinished();
             int recovered = userService.recoverCredits();
-            if (issued > 0 || recovered > 0) {
-                log.info("[予光] 定时任务：补工时 {} 条，恢复信誉分 {} 人", issued, recovered);
+            if (recovered > 0) {
+                log.info("[予光] 定时任务：恢复信誉分 {} 人", recovered);
             }
         } catch (Exception e) {
             log.warn("[予光] 定时任务异常：{}", e.getMessage());

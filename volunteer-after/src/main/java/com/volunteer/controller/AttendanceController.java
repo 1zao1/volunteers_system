@@ -23,6 +23,7 @@ public class AttendanceController {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("issued", attendanceService.myHours(userId));
         m.put("pending", attendanceService.pendingHours(userId));
+        m.put("upcoming", attendanceService.upcomingHours(userId));
         return Result.success(m);
     }
 }

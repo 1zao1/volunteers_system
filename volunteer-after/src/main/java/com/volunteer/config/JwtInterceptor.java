@@ -22,17 +22,29 @@ public class JwtInterceptor implements HandlerInterceptor {
         String token = req.getHeader("Authorization");
         if (token != null && token.startsWith("Bearer ")) token = token.substring(7);
 
+        // 公开接口：活动列表与详情允许游客（未登录）访问
+        String path = req.getRequestURI();
+        boolean publicRoute = "GET".equalsIgnoreCase(req.getMethod())
+                && (path.equals("/api/activities")
+                    || path.matches("/api/activities/\\d+")
+                    || path.equals("/api/activities/categories")
+                    || path.matches("/api/organizers/\\d+")
+                    || path.equals("/api/stats/overview"));
+        if (publicRoute && (token == null || token.isBlank())) {
+            return true;
+        }
+
         try {
             Claims claims = jwtUtil.parse(token);
             req.setAttribute("userId", Long.valueOf(claims.getSubject()));
             Object role = claims.get("role");
             req.setAttribute("role", role);
 
-            // 管理端接口只允许管理员与组织者访问
-            String uri = req.getRequestURI();
+            // 管理端接口只允许组织者访问（平台不再设管理员）
+            String uri = path;
             if (uri.startsWith("/api/admin")) {
                 String r = String.valueOf(role);
-                if (!"admin".equals(r) && !"organizer".equals(r)) {
+                if (!"organizer".equals(r)) {
                     resp.setStatus(403);
                     resp.setContentType("application/json;charset=UTF-8");
                     resp.getWriter().write("{\"code\":403,\"message\":\"没有权限访问管理端\"}");

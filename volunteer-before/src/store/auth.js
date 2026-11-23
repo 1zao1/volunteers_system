@@ -2,8 +2,7 @@ import { defineStore } from 'pinia'
 
 const ROLE_MAP = {
   volunteer: { name: '志愿者', icon: 'bi-person-heart' },
-  organizer: { name: '组织者', icon: 'bi-megaphone' },
-  admin: { name: '管理员', icon: 'bi-shield-check' }
+  organizer: { name: '组织者', icon: 'bi-megaphone' }
 }
 
 export const useAuthStore = defineStore('auth', {
@@ -16,7 +15,6 @@ export const useAuthStore = defineStore('auth', {
     role: (s) => s.user?.role || '',
     roleName: (s) => ROLE_MAP[s.user?.role]?.name || '',
     roleIcon: (s) => ROLE_MAP[s.user?.role]?.icon || 'bi-person',
-    isAdmin: (s) => s.user?.role === 'admin',
     isOrganizer: (s) => s.user?.role === 'organizer',
     displayName: (s) => s.user?.nickname || s.user?.name || '—',
     creditScore: (s) => (s.user?.creditScore ?? 100),

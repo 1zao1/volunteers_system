@@ -2,7 +2,9 @@ package com.volunteer.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.volunteer.entity.Activity;
+import com.volunteer.entity.User;
 import com.volunteer.mapper.ActivityMapper;
+import com.volunteer.mapper.UserMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -15,6 +17,8 @@ public class ActivityService {
 
     @Autowired
     private ActivityMapper activityMapper;
+    @Autowired
+    private UserMapper userMapper;
 
     /** 活动广场：仅展示已发布且尚未结束的活动，按开始时间正序 */
     public List<Activity> list(String category, String keyword) {
@@ -28,19 +32,34 @@ public class ActivityService {
         if (StringUtils.hasText(keyword)) {
             w.and(q -> q.like(Activity::getTitle, keyword).or().like(Activity::getLocation, keyword));
         }
-        return activityMapper.selectList(w);
+        List<Activity> list = activityMapper.selectList(w);
+        fillOrganizer(list);
+        return list;
     }
 
-    /** 管理端：全部活动，含草稿与已结束 */
-    public List<Activity> listAll() {
-        return activityMapper.selectList(new LambdaQueryWrapper<Activity>()
+    /** 管理端：只列出当前组织者自己发布的活动（含草稿与已结束） */
+    public List<Activity> listAll(Long organizerId) {
+        List<Activity> list = activityMapper.selectList(new LambdaQueryWrapper<Activity>()
+                .eq(Activity::getOrganizerId, organizerId)
                 .orderByDesc(Activity::getCreateTime)
                 .orderByDesc(Activity::getId));
+        fillOrganizer(list);
+        return list;
+    }
+
+    /** 校验活动归属：只能操作自己发布的活动 */
+    public Activity requireOwned(Long id, Long operatorId) {
+        Activity a = detail(id);
+        if (a.getOrganizerId() == null || !a.getOrganizerId().equals(operatorId)) {
+            throw new RuntimeException("只能管理自己发布的活动");
+        }
+        return a;
     }
 
     public Activity detail(Long id) {
         Activity a = activityMapper.selectById(id);
         if (a == null) throw new RuntimeException("活动不存在或已删除");
+        fillOrganizer(List.of(a));
         return a;
     }
 
@@ -57,7 +76,8 @@ public class ActivityService {
         activityMapper.insert(a);
     }
 
-    public void update(Activity a) {
+    public void update(Activity a, Long operatorId) {
+        requireOwned(a.getId(), operatorId);
         if (a.getHours() == null) a.setHours(detail(a.getId()).getHours());
         validate(a);
         Activity old = detail(a.getId());
@@ -72,18 +92,23 @@ public class ActivityService {
         activityMapper.updateById(a);
     }
 
-    public void changeStatus(Long id, String status) {
+    public void changeStatus(Long id, String status, Long operatorId) {
+        requireOwned(id, operatorId);
         if (!"published".equals(status) && !"draft".equals(status)
                 && !"closed".equals(status) && !"cancelled".equals(status)) {
             throw new RuntimeException("不支持的活动状态：" + status);
         }
         Activity a = detail(id);
+        if (a.getEndTime() != null && a.getEndTime().isBefore(LocalDateTime.now())
+                && "published".equals(status)) {
+            throw new RuntimeException("活动已结束，不能重新上架");
+        }
         a.setStatus(status);
         activityMapper.updateById(a);
     }
 
-    public void delete(Long id) {
-        detail(id);
+    public void delete(Long id, Long operatorId) {
+        requireOwned(id, operatorId);
         activityMapper.deleteById(id);
     }
 
@@ -112,5 +137,20 @@ public class ActivityService {
         }
         if (a.getHours() == null || a.getHours() <= 0) throw new RuntimeException("认定工时必须大于 0");
         if (a.getMaxCount() == null || a.getMaxCount() <= 0) throw new RuntimeException("招募人数必须大于 0");
+    }
+
+    /** 补充发布人昵称/头像，并计算是否已结束 */
+    private void fillOrganizer(List<Activity> list) {
+        LocalDateTime now = LocalDateTime.now();
+        for (Activity a : list) {
+            a.setEnded(a.getEndTime() != null && a.getEndTime().isBefore(now));
+            if (a.getOrganizerId() != null) {
+                User u = userMapper.selectById(a.getOrganizerId());
+                if (u != null) {
+                    a.setOrganizerName(StringUtils.hasText(u.getNickname()) ? u.getNickname() : u.getUsername());
+                    a.setOrganizerAvatar(u.getAvatar());
+                }
+            }
+        }
     }
 }

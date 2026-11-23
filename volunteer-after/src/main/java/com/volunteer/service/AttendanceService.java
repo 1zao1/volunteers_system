@@ -1,12 +1,15 @@
 package com.volunteer.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.volunteer.entity.Activity;
 import com.volunteer.entity.Attendance;
 import com.volunteer.entity.Registration;
+import com.volunteer.entity.User;
 import com.volunteer.mapper.ActivityMapper;
 import com.volunteer.mapper.AttendanceMapper;
 import com.volunteer.mapper.RegistrationMapper;
+import com.volunteer.mapper.UserMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,6 +27,8 @@ public class AttendanceService {
     private ActivityMapper activityMapper;
     @Autowired
     private RegistrationMapper regMapper;
+    @Autowired
+    private UserMapper userMapper;
 
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
@@ -50,13 +55,23 @@ public class AttendanceService {
         return res;
     }
 
-    /** 审核已通过、活动尚未结束（或刚结束还没发工时）的预计工时 */
+    /** 审核已通过、活动已结束、但还没认定工时的记录 */
     public List<Map<String, Object>> pendingHours(Long userId) {
+        return approvedWithoutHours(userId, true);
+    }
+
+    /** 审核已通过、活动尚未结束的报名，属于待参与，不是待认定 */
+    public List<Map<String, Object>> upcomingHours(Long userId) {
+        return approvedWithoutHours(userId, false);
+    }
+
+    private List<Map<String, Object>> approvedWithoutHours(Long userId, boolean ended) {
         Set<Long> issued = new HashSet<>();
         for (Attendance t : attMapper.selectList(new LambdaQueryWrapper<Attendance>()
                 .eq(Attendance::getUserId, userId))) {
             if (t.getRegistrationId() != null) issued.add(t.getRegistrationId());
         }
+        LocalDateTime now = LocalDateTime.now();
         List<Map<String, Object>> res = new ArrayList<>();
         for (Registration r : regMapper.selectList(new LambdaQueryWrapper<Registration>()
                 .eq(Registration::getUserId, userId)
@@ -64,6 +79,8 @@ public class AttendanceService {
             if (issued.contains(r.getId())) continue;
             Activity a = activityMapper.selectById(r.getActivityId());
             if (a == null) continue;
+            boolean isEnded = a.getEndTime() != null && a.getEndTime().isBefore(now);
+            if (isEnded != ended) continue;
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", r.getId());
             m.put("activityId", a.getId());
@@ -80,7 +97,7 @@ public class AttendanceService {
     }
 
     @Transactional
-    public void issue(Long registrationId, Integer hours, Long operatorId, String role) {
+    public void issue(Long registrationId, Integer hours, Integer creditScore, Long operatorId, String role) {
         if (!"organizer".equals(role)) {
             throw new RuntimeException("工时认定由活动组织者完成");
         }
@@ -91,6 +108,9 @@ public class AttendanceService {
         if (act == null) throw new RuntimeException("活动已删除");
         if (act.getOrganizerId() == null || !act.getOrganizerId().equals(operatorId)) {
             throw new RuntimeException("只能为自己发布的活动认定工时");
+        }
+        if (act.getEndTime() != null && act.getEndTime().isAfter(LocalDateTime.now())) {
+            throw new RuntimeException("活动还没结束，结束后再认定工时");
         }
         if (r.getUserId().equals(operatorId)) throw new RuntimeException("不能给自己认定工时");
         if (attMapper.selectCount(new LambdaQueryWrapper<Attendance>()
@@ -107,6 +127,15 @@ public class AttendanceService {
         t.setHours(h);
         t.setSignTime(LocalDateTime.now());
         attMapper.insert(t);
+
+        // 信誉分由组织者在认定工时时一并给出
+        if (creditScore != null) {
+            int c = Math.max(0, Math.min(100, creditScore));
+            userMapper.update(null, new LambdaUpdateWrapper<User>()
+                    .eq(User::getId, r.getUserId())
+                    .set(User::getCreditScore, c)
+                    .set(User::getCreditTime, LocalDateTime.now()));
+        }
     }
 
     /**
@@ -142,5 +171,16 @@ public class AttendanceService {
         return attMapper.selectList(null).stream()
                 .mapToLong(a -> a.getHours() == null ? 0 : a.getHours())
                 .sum();
+    }
+
+    /** 某个组织者名下活动累计认定的工时 */
+    public long totalHours(Long organizerId) {
+        List<Long> actIds = activityMapper.selectList(new LambdaQueryWrapper<Activity>()
+                        .eq(Activity::getOrganizerId, organizerId))
+                .stream().map(Activity::getId).toList();
+        if (actIds.isEmpty()) return 0;
+        return attMapper.selectList(new LambdaQueryWrapper<Attendance>()
+                        .in(Attendance::getActivityId, actIds))
+                .stream().mapToLong(a -> a.getHours() == null ? 0 : a.getHours()).sum();
     }
 }

@@ -2,7 +2,7 @@
   <div class="section-title">
     <div>
       <h2>我的工时</h2>
-      <div class="sub">已认定工时来自组织者确认；活动结束后自动结算，待认定部分会在此提示</div>
+      <div class="sub">已认定工时来自组织者确认；活动结束后，由组织者认定工时</div>
     </div>
     <router-link to="/activities" class="btn btn-soft btn-sm">
       <i class="bi bi-clock"></i> 参加更多活动
@@ -34,10 +34,28 @@
     </div>
   </section>
 
+  <div v-if="upcoming.length" class="panel mt-24 pending-panel">
+    <div class="panel-head">
+      <h3><i class="bi bi-calendar-check"></i> 待参与（{{ upcoming.length }}）</h3>
+      <span class="sub">报名已通过，活动尚未结束；结束后由组织者认定工时</span>
+    </div>
+    <div v-for="x in upcoming" :key="x.id" class="tl pending">
+      <div class="tl-date">{{ fmtDate(x.startTime) }}</div>
+      <div>
+        <div class="tl-title">{{ x.activityTitle }}</div>
+        <div class="tl-sub">
+          <span v-if="x.category"><i class="bi bi-tag"></i> {{ x.category }}</span>
+          <span style="margin-left: 10px"><i class="bi bi-geo-alt"></i> {{ x.location || '—' }}</span>
+        </div>
+      </div>
+      <div class="tl-hours pending-hours">预计 {{ x.hours }}<small>h</small></div>
+    </div>
+  </div>
+
   <div v-if="pending.length" class="panel mt-24 pending-panel">
     <div class="panel-head">
       <h3><i class="bi bi-hourglass-split"></i> 待认定（{{ pending.length }}）</h3>
-      <span class="sub">这些活动的服务已完成，工时将在组织者确认或系统结算后计入</span>
+      <span class="sub">活动已结束，等待组织者认定工时</span>
     </div>
     <div v-for="x in pending" :key="x.id" class="tl pending">
       <div class="tl-date">{{ fmtDate(x.endTime) }}</div>
@@ -93,6 +111,7 @@ import { useAuthStore } from '../store/auth'
 const auth = useAuthStore()
 const issued = ref([])
 const pending = ref([])
+const upcoming = ref([])
 const loading = ref(true)
 
 const total = computed(() => issued.value.reduce((s, x) => s + (Number(x.hours) || 0), 0))
@@ -106,7 +125,7 @@ const level = computed(() => {
   if (h >= 20) return '三星志愿者 · 累计 20 小时以上'
   if (h >= 10) return '二星志愿者 · 累计 10 小时以上'
   if (h > 0) return '一星志愿者 · 已开始记录服务时长'
-  return pending.value.length ? '服务已完成，等待工时结算' : '尚未开始记录，先报名一个活动吧'
+  return pending.value.length ? '服务已完成，等待工时结算' : (upcoming.value.length ? '已报名活动，等待参与' : '尚未开始记录，先报名一个活动吧')
 })
 
 async function load() {
@@ -116,9 +135,11 @@ async function load() {
     if (Array.isArray(data)) {
       issued.value = data
       pending.value = []
+      upcoming.value = []
     } else {
       issued.value = data?.issued || []
       pending.value = data?.pending || []
+      upcoming.value = data?.upcoming || []
     }
   } catch (e) {
     toast.error(e.message)

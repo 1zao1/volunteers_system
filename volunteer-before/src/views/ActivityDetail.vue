@@ -19,7 +19,15 @@
       <div class="panel">
         <div class="panel-head">
           <h3>活动介绍</h3>
-          <span class="sub">发布人：{{ a.organizerName || '活动组织方' }}</span>
+          <router-link
+            v-if="a.organizerId"
+            :to="`/organizer/${a.organizerId}`"
+            class="pub-link"
+          >
+            发布人：<b>{{ a.organizerName || '查看主页' }}</b>
+            <i class="bi bi-chevron-right"></i>
+          </router-link>
+          <span v-else class="sub">发布人：平台</span>
         </div>
         <div class="prose">{{ a.description || '组织者暂未填写详细说明，可在报名后与负责人联系。' }}</div>
 
@@ -27,10 +35,10 @@
           <h2 style="font-size: 16px"><i class="bi bi-info-circle" style="color: var(--brand)"></i> 报名须知</h2>
         </div>
         <div class="prose" style="color: var(--muted); font-size: 14px">
-          1. 报名后状态为「待审核」，由该活动的组织者审核，其他组织者与管理员不能代审；
-          2. 活动结束后，已通过且未标记缺席的报名会自动结算工时，可在「我的工时」查看；
+          1. 报名后状态为「待审核」，由该活动的组织者审核，其他组织者不能代审；
+          2. 活动结束后由组织者认定工时并给出信誉分，可在「我的工时」查看；
           3. 如需取消，请在开始前于「我的报名」中撤回，把名额留给其他志愿者；
-          4. 报名后无故缺席将标记为「缺席」并扣除 5 分信誉分；低于 85 分报名时会提示，每 2 小时恢复 1 分，直到回到 85 分。
+          4. 无故缺席会标记为「缺席」并扣 5 分信誉分；低于 85 分同时只能有 1 个未完成报名，低于 60 分暂停报名，每 2 小时恢复 1 分。
         </div>
       </div>
 
@@ -61,22 +69,38 @@
         <button v-if="isOwner" class="btn btn-soft btn-block" disabled>
           <i class="bi bi-megaphone"></i> 这是你发布的活动
         </button>
-        <div v-else-if="auth.role === 'admin'" class="admin-note">
-          <i class="bi bi-info-circle"></i>
-          管理员不参与报名与审核，活动运营由组织者负责
-        </div>
+        <button v-else-if="!auth.isLogin" class="btn btn-primary btn-block" @click="$router.push('/login')">
+          <i class="bi bi-box-arrow-in-right"></i> 登录后报名
+        </button>
         <button
           v-else-if="!mine"
           class="btn btn-primary btn-block"
-          :disabled="ended || isFull || submitting"
+          :disabled="ended || started || isFull || submitting"
           @click="signup"
         >
           <i class="bi bi-hand-index-thumb"></i>
-          {{ ended ? '活动已结束' : isFull ? '名额已满' : submitting ? '提交中…' : '立即报名' }}
+          {{ ended ? '活动已结束' : started ? '活动进行中' : isFull ? '名额已满' : submitting ? '提交中…' : '立即报名' }}
         </button>
         <button v-else class="btn btn-soft btn-block" disabled>
           <i class="bi bi-check2-circle"></i> 你已报名该活动
         </button>
+        <button
+          v-if="!isOwner && a.organizerId"
+          type="button"
+          class="btn btn-ghost btn-block chat-btn"
+          @click="contactOrganizer"
+        >
+          <i class="bi bi-chat-dots"></i> 咨询组织者
+        </button>
+        <button
+          v-if="canGroup"
+          type="button"
+          class="btn btn-soft btn-block chat-btn"
+          @click="openGroupChat"
+        >
+          <i class="bi bi-people"></i> 进入活动群聊
+        </button>
+
         <div class="hint" style="text-align: center">报名后可在「我的报名」中查看审核进度</div>
       </aside>
     </div>
@@ -90,14 +114,15 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
-import { styleOf, timeRange, isEnded, remainOf, percentOf, fmtTime } from '../utils/category'
+import { styleOf, timeRange, isEnded, isStarted, remainOf, percentOf, fmtTime } from '../utils/category'
 import { coverUrl } from '../utils/covers'
 import { toast } from '../utils/toast'
 import { useAuthStore } from '../store/auth'
 
 const route = useRoute()
+const router = useRouter()
 const auth = useAuthStore()
 const a = ref(null)
 const mine = ref(null)
@@ -112,15 +137,19 @@ const headStyle = computed(() => {
 })
 const range = computed(() => timeRange(a.value?.startTime, a.value?.endTime))
 const ended = computed(() => isEnded(a.value))
+const started = computed(() => isStarted(a.value))
 const remain = computed(() => remainOf(a.value))
 const isFull = computed(() => remain.value <= 0)
 const percent = computed(() => percentOf(a.value))
 const isOwner = computed(
   () => auth.role === 'organizer' && a.value?.organizerId && a.value.organizerId === auth.user?.id
 )
+const canGroup = computed(
+  () => auth.isLogin && (isOwner.value || mine.value?.status === 'approved')
+)
 
 const stateText = computed(() =>
-  ended.value ? '已结束' : isFull.value ? '已满员' : a.value?.status === 'draft' ? '未发布' : '招募中'
+  ended.value ? '已结束' : started.value ? '活动进行中' : isFull.value ? '已满员' : a.value?.status === 'draft' ? '未发布' : '招募中'
 )
 const statusCls = computed(() => (ended.value ? 'grey' : isFull.value ? 'rose' : 'green'))
 const myStatusText = computed(() => {
@@ -137,7 +166,7 @@ async function load() {
   }
   try {
     a.value = await api.getActivity(id)
-    if (auth.role !== 'admin') {
+    if (auth.isLogin) {
       const regs = await api.getMyRegistrations()
       mine.value = (regs || []).find((r) => Number(r.activityId) === Number(id) && r.status !== 'rejected')
     }
@@ -146,8 +175,28 @@ async function load() {
   }
 }
 
+function contactOrganizer() {
+  if (!auth.isLogin) {
+    toast.error('登录后才能给组织者发消息')
+    return router.push('/login')
+  }
+  const name = a.value?.organizerName || '组织者'
+  router.push({ path: '/messages', query: { to: String(a.value.organizerId), name } })
+}
+
+function openGroupChat() {
+  router.push({ path: '/messages', query: { group: String(a.value.id) } })
+}
+
 async function signup() {
+  if (!auth.isLogin) {
+    toast.error('登录后才能报名活动')
+    return
+  }
   const credit = auth.creditScore
+  if (credit < 60) {
+    return toast.error(`您现在的信誉分为：${credit}，低于60分，暂不能报名新活动，每 2 小时恢复 1 分`)
+  }
   if (credit < 85) {
     const ok = window.confirm(`您现在的信誉分为：${credit}，低于85分，需要做活动换取信誉分，2小时换取1信誉分，直至达到85及以上。确定继续报名吗？`)
     if (!ok) return
